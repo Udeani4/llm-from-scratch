@@ -21,6 +21,7 @@ import argparse, pathlib, subprocess, sys, shlex
 ROOT = pathlib.Path(__file__).resolve().parent
 
 def run(cmd: str):
+    # Run a command from inside part_7/ and abort on failure.
     print(f"\n>>> {cmd}")
     res = subprocess.run(shlex.split(cmd), cwd=ROOT)
     if res.returncode != 0:
@@ -36,6 +37,8 @@ if __name__ == "__main__":
     run("python -m pytest -q tests/test_reward_forward.py")
 
     # 2) optional demo: tiny train + eval
+    # Train the RM with the Bradley-Terry loss (reusing the Part 4 tokenizer), then measure pairwise
+    # accuracy on training pairs (should be high = it fit them) and unseen test pairs (the real check).
     if args.demo:
         run("python train_rm.py --steps 300 --batch_size 8 --block_size 256 --n_layer 2 --n_head 2 --n_embd 128 --loss bt --bpe_dir ../part_4/runs/part4-demo/tokenizer")
         run("python eval_rm.py --ckpt runs/rm-demo/model_last.pt --split train[:8] --bpe_dir ../part_4/runs/part4-demo/tokenizer")

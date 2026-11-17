@@ -16,6 +16,8 @@
 #       test_rope_apply.py
 #       test_kvcache_shapes.py
 #
+# (Note: the RoPE file is actually named rope_custom.py.)
+#
 # Run from inside `part_3/`:
 #   cd part_3
 #   python orchestrator.py --demo
@@ -26,6 +28,7 @@ import argparse, pathlib, subprocess, sys, shlex
 ROOT = pathlib.Path(__file__).resolve().parent
 
 def run(cmd: str):
+    # Run a command from inside part_3/ and abort on failure.
     print(f"\n>>> {cmd}")
     res = subprocess.run(shlex.split(cmd), cwd=ROOT)
     if res.returncode != 0:
@@ -42,6 +45,7 @@ if __name__ == "__main__":
     run("python -m pytest -q tests/test_kvcache_shapes.py")
 
     # 2) (optional) generation demo
+    # All modern features on: attend to the 4 first tokens + the 64 most recent ones.
     if args.demo:
         run("python demo_generate.py --rmsnorm --rope --swiglu --sliding_window 64 --sink 4 --tokens 200")
 

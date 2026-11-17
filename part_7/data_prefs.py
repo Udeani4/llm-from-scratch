@@ -9,6 +9,8 @@ except Exception:
 
 @dataclass
 class PrefExample:
+    # One human preference judgement: for this prompt, `chosen` was rated better than `rejected`.
+    # This is the raw data behind RLHF (Reinforcement Learning from Human Feedback).
     prompt: str
     chosen: str
     rejected: str
@@ -18,6 +20,9 @@ def load_preferences(split: str = "train[:200]") -> List[PrefExample]:
     """Load a tiny preference set. Tries Anthropic HH; falls back to a toy set.
     HH fields: 'chosen', 'rejected' (full conversations). We use an empty prompt.
     """
+    # Anthropic HH-RLHF: human-rated pairs of assistant conversations judged on Helpfulness/Harmlessness.
+    # Each 'chosen'/'rejected' already contains the whole dialogue ("Human: ... Assistant: ..."),
+    # which is why the prompt field is left empty here.
     items: List[PrefExample] = []
     if load_dataset is not None:
         try:
@@ -32,6 +37,7 @@ def load_preferences(split: str = "train[:200]") -> List[PrefExample]:
             pass
     if not items:
         # fallback toy pairs
+        # (prompt, good answer, bad answer)
         items = [
             PrefExample("Summarize: Scaling laws for neural language models.",
                         "Scaling laws describe how performance improves predictably as model size, data, and compute increase.",

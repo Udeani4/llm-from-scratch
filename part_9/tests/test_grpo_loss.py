@@ -7,6 +7,7 @@ def test_grpo_clipped_objective_behaves():
     new_logp = torch.log(torch.full((N,), 1.2))     # log π_new = log(1.2) → ratio=1.2
     adv      = torch.ones(N)                        # positive advantage
     kl_mean  = torch.tensor(0.5)                    # pretend KL(π||π_ref)=0.5
+    # (ratio 1.2 exceeds 1 + clip_ratio = 1.1, so the clipped branch is the one used)
 
     out = ppo_policy_only_losses(
         new_logp=new_logp,

@@ -32,6 +32,8 @@ OUT = ROOT / "out"
 
 
 def run(cmd: str):
+    # Run a script as a subprocess from inside part_1/ (so the local imports resolve);
+    # abort the whole orchestrator if any step fails.
     print(f"\n>>> {cmd}")
     res = subprocess.run(shlex.split(cmd), cwd=ROOT)
     if res.returncode != 0:

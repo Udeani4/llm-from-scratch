@@ -13,13 +13,19 @@
 #
 # Run from inside `part_8/`:
 #   cd part_8
-#   python orchestrator.py --demo 
+#   python orchestrator.py --demo
 #   pytest -q
+#
+# The full pipeline so far:  pretrain (Part 4) -> SFT (Part 6) -> reward model (Part 7) -> RL (this part).
+# RLHF idea: let the SFT model generate answers, score them with the reward model, and nudge the
+# model toward higher-scoring answers — while a KL penalty keeps it close to the SFT model.
 
 import argparse, pathlib, subprocess, sys
 ROOT = pathlib.Path(__file__).resolve().parent
 
 def run(cmd: str):
+    # Run a command from inside part_8/ and abort on failure.
+    # (Uses a plain .split(), so arguments can't contain quoted spaces here.)
     print(f"\n>>> {cmd}")
     res = subprocess.run(cmd.split(), cwd=ROOT)
     if res.returncode != 0:
@@ -42,6 +48,7 @@ if __name__ == "__main__":
         # run("python train_ppo.py --policy_ckpt ../part_6/runs/sft-demo/model_last.pt --reward_ckpt ../part_7/runs/rm-demo/model_last.pt --steps 50 --batch_size 4 --resp_len 128 --bpe_dir ../part_4/runs/part4-demo/tokenizer")
         # run("python eval_ppo.py --policy_ckpt runs/ppo-demo/model_last.pt --reward_ckpt ../part_7/runs/rm-demo/model_last.pt --split train[:24] --bpe_dir ../part_4/runs/part4-demo/tokenizer")
 
+        # 100 PPO iterations, 4 prompts each, responses up to 128 tokens.
         run("python train_ppo.py --policy_ckpt ../part_6/runs/sft-demo/model_last.pt --reward_ckpt ../part_7/runs/rm-demo/model_last.pt --steps 100 --batch_size 4 --resp_len 128 --bpe_dir ../part_4/runs/part4-demo/tokenizer")
         run("python eval_ppo.py --policy_ckpt runs/ppo-demo/model_last.pt --reward_ckpt ../part_7/runs/rm-demo/model_last.pt --split train[:24] --bpe_dir ../part_4/runs/part4-demo/tokenizer")
 

@@ -13,28 +13,40 @@ class TopKGate(nn.Module):
         weights: (S, k) float, gate weights (sum ≤ 1 per token)
         aux_loss: scalar load‑balancing penalty
     """
+    # The router: a tiny linear classifier that, for each token, scores every expert and picks the top k.
     def __init__(self, dim: int, n_expert: int, k: int = 1):
         super().__init__()
         assert k >= 1 and k <= n_expert
         self.n_expert = n_expert
         self.k = k
+        # One score per expert per token. Learned jointly with the rest of the model.
         self.w_g = nn.Linear(dim, n_expert, bias=True)
 
     def forward(self, x: torch.Tensor):
         # x: (S, C) where S = tokens (batch * seq)
         logits = self.w_g(x)                  # (S, E)
         probs = torch.softmax(logits, dim=-1) # (S, E)
+        # Keep only the k best experts per token. Their probabilities become the mixing weights
+        # (not renormalised, so with k>1 they sum to <= 1). Gradients reach the router through these
+        # weights: if an expert's output helps, its weight (and so its score for such tokens) goes up.
         topk_vals, topk_idx = torch.topk(probs, k=self.k, dim=-1)  # (S,k)
 
         # Load‑balancing aux loss (Switch):
+        # Problem it solves: without it, the router quickly learns to send almost everything to
+        # one or two experts ("expert collapse"), wasting the rest. This loss is minimised when
+        # tokens are spread evenly.
         S, E = probs.size(0), probs.size(1)
         # importance: avg prob per expert
+        # (soft, differentiable: how much the router "wants" each expert)
         importance = probs.mean(dim=0)                 # (E,)
         # load: fraction of tokens assigned as primary (top‑1 hard assignment)
+        # (hard counts, not differentiable: how many tokens each expert actually got)
         hard1 = topk_idx[:, 0]                         # (S,)
         load = torch.zeros(E, device=x.device)
-        load.scatter_add_(0, hard1, torch.ones_like(hard1, dtype=load.dtype))
+        load.scatter_add_(0, hard1, torch.ones_like(hard1, dtype=load.dtype))   # count tokens per expert
         load = load / max(S, 1)
+        # E * sum(importance * load) equals 1.0 under perfectly uniform routing and grows as routing
+        # concentrates. Gradient flows through `importance`, nudging probability away from overloaded experts.
         aux_loss = (E * (importance * load).sum())
         # print("*"*50)
         # print(probs, importance, hard1, load, aux_loss)

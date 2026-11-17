@@ -29,6 +29,7 @@ ROOT = pathlib.Path(__file__).resolve().parent
 RUNS = ROOT / 'runs' / 'min-gpt'
 
 def run(cmd: str):
+    # Run each stage as a subprocess from inside part_2/; stop on the first failure.
     print(f"\n>>> {cmd}")
     res = subprocess.run(shlex.split(cmd), cwd=ROOT)
     if res.returncode != 0:
@@ -36,6 +37,7 @@ def run(cmd: str):
 
 if __name__ == '__main__':
     # quick smoke training on a tiny file path tiny_hi.txt; adjust as needed
+    # (deliberately tiny model: 2 layers, 2 heads, 128-dim, 128-token context, so it runs on CPU)
     run("python train.py --data tiny_hi.txt --steps 400 --sample_every 100 --eval_interval 100 --batch_size 32 --block_size 128 --n_layer 2 --n_head 2 --n_embd 128")
 
     # sample from the best checkpoint

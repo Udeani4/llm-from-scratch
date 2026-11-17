@@ -2,7 +2,13 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
+# Pluggable experiment logging. All loggers share the same .log(step=..., **metrics) interface,
+# so the training loop doesn't care which backend is active.
+# (Optional/Any/Dict in the annotations below aren't imported; that works only because
+#  `from __future__ import annotations` keeps annotations as unevaluated strings.)
+
 class NoopLogger:
+    # Used when logging is disabled: every call does nothing.
     def log(self, **kwargs):
         pass
     def close(self):
@@ -27,11 +33,13 @@ class TBLogger(NoopLogger):
     def __init__(self, out_dir: str, flush_secs: int = 10, run_name: str | None = None):
         self.w = None
         self.hparams_logged = False
+        # One sub-folder per run (timestamped), so TensorBoard can overlay multiple runs.
         run_name = run_name or time.strftime("%Y%m%d-%H%M%S")
         run_dir = Path(out_dir) / run_name
         run_dir.mkdir(parents=True, exist_ok=True)
         try:
             from torch.utils.tensorboard import SummaryWriter
+            # SummaryWriter writes event files that `tensorboard --logdir ...` reads and plots.
             self.w = SummaryWriter(log_dir=str(run_dir), flush_secs=flush_secs)
         except Exception as e:
             print(f"[TBLogger] TensorBoard not available: {e}. Logging disabled.")
@@ -42,6 +50,7 @@ class TBLogger(NoopLogger):
 
     # ---------- backwards-compatible ----------
     def log(self, step: Optional[int] = None, **kv: Any):
+        # Route each metric to the right TensorBoard panel based on its type.
         if not self.w: return
         for k, v in kv.items():
             # text channel (opt-in via key prefix)
@@ -77,6 +86,7 @@ class TBLogger(NoopLogger):
                 pass
 
             # number-like
+            # (plain floats/ints such as loss and lr end up here -> line charts in TensorBoard)
             try:
                 self.w.add_scalar(k, float(v), global_step=step)
             except Exception:
@@ -84,6 +94,7 @@ class TBLogger(NoopLogger):
                 pass
 
     # ---------- nice-to-have helpers ----------
+    # Thin, exception-safe wrappers around SummaryWriter methods. Logging must never crash training.
     def hist(self, tag: str, values: Any, step: Optional[int] = None, bins: str = "tensorflow"):
         if not self.w: return
         try:
@@ -107,6 +118,7 @@ class TBLogger(NoopLogger):
         """
         if not self.w: return
         try:
+            # Guess channel layout: 3-D with first dim 1 or 3 -> channels-first.
             self.w.add_image(tag, img, global_step=step, dataformats="CHW" if getattr(img, "ndim", 0) == 3 and img.shape[0] in (1,3) else "HWC")
         except Exception:
             pass
@@ -142,6 +154,7 @@ class TBLogger(NoopLogger):
             except Exception: pass
 
 class WBLogger(NoopLogger):
+    # Weights & Biases backend (cloud dashboard). Requires `pip install wandb` and `wandb login`.
     def __init__(self, project: str, run_name: str | None = None):
         try:
             import wandb
@@ -150,10 +163,12 @@ class WBLogger(NoopLogger):
         except Exception:
             self.wb = None
     def log(self, **kv):
+        # (the `step` key is logged as a regular metric here)
         if self.wb: self.wb.log(kv)
 
 
 def init_logger(which: str, out_dir: str = "runs/part4"):
+    # Factory: pick a backend by name; fall back to the no-op logger if TensorBoard isn't installed.
     if which == 'tensorboard':
         tb = TBLogger(out_dir)
         return tb if tb.w is not None else NoopLogger()

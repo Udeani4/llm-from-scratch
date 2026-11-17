@@ -15,6 +15,7 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument('--ckpt', type=str, required=True)
     p.add_argument('--prompt', type=str, required=True)
+    # Architecture flags must match the trained checkpoint, otherwise load_state_dict fails.
     p.add_argument('--block_size', type=int, default=256)
     p.add_argument('--n_layer', type=int, default=4)
     p.add_argument('--n_head', type=int, default=4)
@@ -30,6 +31,7 @@ def main():
     ckpt = torch.load(args.ckpt, map_location=device)
     cfg = ckpt.get('config', {})
 
+    # The collator is used here only for its tokenizer (same one used during SFT).
     col = SFTCollator(block_size=cfg.get('block_size', 256), bpe_dir=args.bpe_dir)
     model = GPTModern(vocab_size=col.vocab_size, block_size=args.block_size,
                       n_layer=args.n_layer, n_head=args.n_head, n_embd=args.n_embd,
@@ -37,12 +39,16 @@ def main():
     model.load_state_dict(ckpt['model'])
     model.eval()
 
+    # Wrap the question in the SAME template used in training, ending at "### Response:\n",
+    # so the model's most natural continuation is an answer.
     prompt_text = format_prompt_only(args.prompt).replace('</s>','')
     ids = col.encode(prompt_text)
     idx = torch.tensor([ids], dtype=torch.long, device=device)
 
     with torch.no_grad():
-        out = model.generate(idx, max_new_tokens=args.tokens, 
+        # top_k=3 + low temperature: only choose among the 3 likeliest tokens -> conservative output.
+        # generate() stops early when the model emits </s> (eos_id=1), i.e. when SFT taught it to end.
+        out = model.generate(idx, max_new_tokens=args.tokens,
                              temperature=args.temperature, top_k=3)
 
     # decode: prefer BPE if collator has it, else fall back to bytes
@@ -50,6 +56,7 @@ def main():
     orig_len = idx.size(1)
     if hasattr(col, "tok") and hasattr(col.tok, "decode"):
         # decode full text or just the generated suffix; suffix is often clearer
+        # (this prints prompt + answer; use out_ids[orig_len:] for the answer only)
         generated = col.tok.decode(out_ids)
         print(generated)
     else:

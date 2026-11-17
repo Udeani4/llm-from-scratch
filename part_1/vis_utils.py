@@ -15,6 +15,7 @@ def save_matrix_heatmap(mat: np.ndarray, title: str, filename: str, xlabel: str 
     """
     _ensure_out()
     plt.figure()
+    # Each cell's colour = the matrix value (e.g. an attention weight).
     plt.imshow(mat, aspect='auto')
     plt.title(title)
     plt.xlabel(xlabel)
@@ -32,11 +33,13 @@ def save_attention_heads_grid(weights: np.ndarray, filename: str, title_prefix: 
     """
     _ensure_out()
     _, H, T, _ = weights.shape
+    # Up to 4 heads per row; ceil-divide to get the number of rows.
     cols = min(4, H)
     rows = (H + cols - 1) // cols
     plt.figure(figsize=(3*cols, 3*rows))
     for h in range(H):
         ax = plt.subplot(rows, cols, h+1)
+        # One heatmap per head. Row = query token (who is looking), column = key token (who is looked at).
         ax.imshow(weights[0, h], aspect='auto')
         ax.set_title(f"{title_prefix} {h}")
         ax.set_xlabel('Key pos')

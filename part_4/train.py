@@ -28,8 +28,12 @@ from checkpointing import (
 )
 from logger import init_logger
 
+# Part 4 training loop = Part 2's loop + the "scaling up" machinery:
+# BPE tokenizer, warmup+cosine LR, mixed precision, gradient accumulation, resumable checkpoints, logging.
+
 
 def run_cfg_from_args(args, vocab_size: int) -> dict:
+    # Constructor kwargs for GPTModern; saved into every checkpoint so the model can be rebuilt.
     return dict(
         vocab_size=vocab_size,
         block_size=args.block_size,
@@ -79,6 +83,7 @@ def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     # output dir and (possible) checkpoint
+    # If out_dir already has model_last.pt, this run RESUMES it instead of starting fresh.
     out_dir = Path(args.out); out_dir.mkdir(parents=True, exist_ok=True)
     ckpt_path = out_dir / "model_last.pt"
     have_ckpt = ckpt_path.exists()
@@ -100,6 +105,8 @@ def main():
     tok = None
     tok_dir = None
     if have_ckpt:
+        # On resume we MUST reuse the original tokenizer: retraining could assign different ids,
+        # and the learned embeddings would then point at the wrong tokens.
         if not saved_tok_dir:
             raise RuntimeError(
                 "Checkpoint was found but tokenizer_dir.txt is missing. "
@@ -111,6 +118,7 @@ def main():
         print(f"[resume] Loaded tokenizer from {tok_dir} (vocab={vocab_size})")
     else:
         if args.bpe:
+            # Fresh run: learn a BPE vocabulary from the training data itself, and save it.
             tok = BPETokenizer(vocab_size=args.vocab_size)
             tok.train(args.data)
             tok_dir = str(out_dir / 'tokenizer'); Path(tok_dir).mkdir(parents=True, exist_ok=True)
@@ -120,6 +128,7 @@ def main():
         else:
             tok = None
             vocab_size = 256  # byte-level fallback (not recommended for Part 4)
+            # (note: make_loader below needs a tokenizer, so in practice --bpe is required)
 
     # ---- dataset ----
     train_loader = make_loader(args.data, tok, args.block_size, args.batch_size, shuffle=True)
@@ -127,6 +136,7 @@ def main():
     # ---- build model config ----
     if have_ckpt:
         cfg_build = ckpt["config"]
+        # Embedding/output layer sizes depend on vocab, so a vocab change would break the weights.
         if cfg_build.get("vocab_size") != vocab_size:
             raise RuntimeError(
                 f"Tokenizer vocab ({vocab_size}) != checkpoint config vocab ({cfg_build.get('vocab_size')}). "
@@ -139,7 +149,11 @@ def main():
     model = GPTModern(**cfg_build).to(device)
     optim = torch.optim.AdamW(model.parameters(), lr=args.lr, betas=(0.9, 0.95), weight_decay=0.1)
 
+    # Number of OPTIMIZER steps (not micro-batches) the LR schedule spans.
+    # (len(train_loader) counts micro-batches, so with grad accumulation this overestimates the
+    #  steps one epoch can provide; with --steps set, args.steps is usually the binding limit.)
     total_steps = min(args.steps, args.epochs * len(train_loader))
+    # Warmup is capped at 10% of training so short runs aren't all warmup.
     warmup = min(args.warmup_steps, max(total_steps // 10, 1))
     sched = WarmupCosineLR(optim, warmup_steps=warmup, total_steps=total_steps, base_lr=args.lr)
 
@@ -162,6 +176,8 @@ def main():
             pass
 
     # ---- graceful save on SIGINT/SIGTERM ----
+    # Ctrl+C (or a cluster job being pre-empted) just sets a flag; the loop then saves a checkpoint
+    # at a clean point and exits, so no progress is lost.
     save_requested = {"flag": False}
     def _on_term(sig, frame): save_requested["flag"] = True
     signal.signal(signal.SIGTERM, _on_term)
@@ -169,8 +185,8 @@ def main():
 
     # ---- train loop ----
     model.train()
-    while step < args.steps:
-        for xb, yb in train_loader:
+    while step < args.steps:                 # loop over epochs until the step budget is used up
+        for xb, yb in train_loader:          # each xb/yb is one MICRO-batch
             if step >= args.steps: break
             if save_requested["flag"]:
                 atomic_save_all(model, optim, sched, amp, step, out_dir, tok_dir, args.keep_last_k, cfg_build)
@@ -179,13 +195,17 @@ def main():
 
             it_t0 = time.time()
             xb, yb = xb.to(device), yb.to(device)
+            # Forward in fp16 where safe (autocast keeps sensitive ops like softmax/loss in fp32).
             with torch.cuda.amp.autocast(enabled=amp.amp):
                 logits, loss, _ = model(xb, yb)
+            # Accumulate this micro-batch's (scaled) gradients.
             amp.backward(loss)
 
+            # Every grad_accum_steps micro-batches: one real parameter update.
+            # (No gradient clipping here, unlike Part 2.)
             if amp.should_step():
                 amp.step(); amp.zero_grad()
-                lr = sched.step()
+                lr = sched.step()            # advance the LR schedule once per optimizer step
                 step += 1
 
                 # periodic checkpoint
@@ -196,6 +216,7 @@ def main():
 
                 # logging
                 if step % 50 == 0:
+                    # loss shown is the last micro-batch's (unscaled) loss.
                     logger.log(step=step, loss=float(loss.item()), lr=float(lr))
                     _log_runtime(logger, step, it_t0, xb, device)
                     _log_model_stats(logger, model, step, do_hists=False)

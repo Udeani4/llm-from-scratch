@@ -2,7 +2,7 @@ from __future__ import annotations
 import argparse, torch
 import torch.nn as nn
 from pathlib import Path
-torch.manual_seed(0)
+torch.manual_seed(0)   # reproducible runs
 
 # Reuse GPTModern from Part 3
 import sys
@@ -14,11 +14,14 @@ from dataset_sft import load_tiny_hf
 from collator_sft import SFTCollator
 from curriculum import LengthCurriculum
 
+# SFT = continue training a PRETRAINED language model, but on (instruction, response) pairs with
+# the prompt tokens masked out of the loss. Same model, same next-token loss, different data.
+
 
 def main():
     p = argparse.ArgumentParser()
     p.add_argument('--data', type=str, default='huggingface', help='huggingface or path to local jsonl (unused in demo)')
-    p.add_argument('--ckpt', type=str, required=False)
+    p.add_argument('--ckpt', type=str, required=False)       # pretrained checkpoint to start from (Part 4)
     p.add_argument('--out', type=str, default='runs/sft')
     p.add_argument('--steps', type=int, default=200)
     p.add_argument('--batch_size', type=int, default=8)
@@ -42,6 +45,7 @@ def main():
         print(f"PROMPT: {it.prompt}\nRESPONSE: {it.response}\n{'-'*40}")
 
     # Curriculum over (prompt,response)
+    # Materialise the short->long ordering into a list we can slice into batches.
     tuples = [(it.prompt, it.response) for it in items]
     cur = list(LengthCurriculum(tuples))
     print(cur)
@@ -53,6 +57,8 @@ def main():
                       use_rmsnorm=True, use_swiglu=True, rope=True).to(device)
 
     if args.ckpt:
+        # Start from pretrained weights. This is the key point of SFT: the model already knows
+        # language from pretraining; fine-tuning only teaches it the instruction->answer format.
         print(f"Using model config from checkpoint {args.ckpt}")
         ckpt = torch.load(args.ckpt, map_location=device)
         cfg = ckpt.get('config', {})
@@ -68,11 +74,13 @@ def main():
         batch = cur[i:i+args.batch_size]
         if not batch:
             # restart curriculum
-            # cur = list(LengthCurriculum(tuples)); 
+            # cur = list(LengthCurriculum(tuples));
             i = 0
             continue
+        # Tokenize + build masked labels (prompt positions = -100).
         xb, yb = col.collate(batch)
         xb, yb = xb.to(device), yb.to(device)
+        # Cross-entropy ignores -100 labels, so loss = average error on RESPONSE tokens only.
         logits, loss, _ = model(xb, yb)
         opt.zero_grad(set_to_none=True)
         loss.backward()
@@ -80,6 +88,8 @@ def main():
         step += 1; i += args.batch_size
         if step % 20 == 0:
             print(f"step {step}: loss={loss.item():.4f}")
+        # Note: 24 examples for 300 steps = many epochs over the same data -> heavy memorisation.
+        # Fine for a demo; real SFT uses thousands+ of examples for ~1-3 epochs.
 
     Path(args.out).mkdir(parents=True, exist_ok=True)
     cfg = {
@@ -96,6 +106,7 @@ def main():
         "tokenizer_type": "byte" if col.vocab_size == 256 else "bpe",
         "tokenizer_dir": None,   # set a real path if you have a trained BPE dir
     }
+    # This SFT checkpoint is the starting point ("policy") for Parts 7-9.
     torch.save({'model': model.state_dict(), 'config': cfg},
                str(Path(args.out)/'model_last.pt'))
     print(f"Saved SFT checkpoint to {args.out}/model_last.pt")

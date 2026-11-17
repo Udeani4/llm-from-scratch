@@ -6,4 +6,5 @@ def test_bradley_terry_monotonic():
     neg = torch.tensor([1.0, 1.5])
     l1 = bradley_terry_loss(pos, neg)
     l2 = bradley_terry_loss(pos+1.0, neg)  # increase margin
+    # A bigger gap between chosen and rejected scores must mean a lower loss.
     assert l2 < l1

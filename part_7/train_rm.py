@@ -26,10 +26,12 @@ def main():
     device = torch.device('cuda' if torch.cuda.is_available() and not args.cpu else 'cpu')
 
     # data
+    # 80 (prompt, chosen, rejected) triples.
     items = load_preferences(split='train[:80]')
     triples = [(it.prompt, it.chosen, it.rejected) for it in items]
 
     # collator + model
+    # The RM is trained from scratch here (random init), not initialised from the SFT model.
     col = PairCollator(block_size=args.block_size, bpe_dir=args.bpe_dir)
     model = RewardModel(vocab_size=col.vocab_size, block_size=args.block_size,
                         n_layer=args.n_layer, n_head=args.n_head, n_embd=args.n_embd).to(device)
@@ -40,11 +42,13 @@ def main():
     while step < args.steps:
         batch = triples[i:i+args.batch_size]
         if not batch:
-            i = 0; continue
+            i = 0; continue   # wrapped past the end -> start another epoch
         pos, neg = col.collate(batch)
         pos, neg = pos.to(device), neg.to(device)
+        # Score both answers of every pair with the SAME model.
         r_pos = model(pos)
         r_neg = model(neg)
+        # Loss only depends on r_pos - r_neg: "push chosen up, push rejected down".
         if args.loss == 'bt':
             loss = bradley_terry_loss(r_pos, r_neg)
         else:
@@ -54,10 +58,12 @@ def main():
         opt.step()
         step += 1; i += args.batch_size
         if step % 25 == 0:
+            # Batch accuracy: fraction of pairs ranked the same way as the human label.
             acc = (r_pos > r_neg).float().mean().item()
             print(f"step {step}: loss={loss.item():.4f} acc={acc:.2f}")
 
     Path(args.out).mkdir(parents=True, exist_ok=True)
+    # Save weights + architecture; Parts 8-9 load this to score policy outputs.
     torch.save({'model': model.state_dict(), 'config': {
         'vocab_size': col.vocab_size,
         'block_size': args.block_size,

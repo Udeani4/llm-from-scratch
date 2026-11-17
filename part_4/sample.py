@@ -22,10 +22,11 @@ def main():
     device = torch.device('cuda' if torch.cuda.is_available() and not args.cpu else 'cpu')
 
     ckpt = torch.load(args.ckpt, map_location='cpu')  # load on CPU first; move model later
-    sd = ckpt['model']
+    sd = ckpt['model']                 # state_dict: parameter name -> weight tensor
     cfg = ckpt.get('config') or {}
 
     # tokenizer (if present)
+    # The model only understands ids from the SAME tokenizer it was trained with, so load that one.
     tok = None
     tok_dir_file = Path(args.ckpt).with_name('tokenizer_dir.txt')
     if tok_dir_file.exists():
@@ -49,10 +50,13 @@ def main():
         # pos_emb.weight: [block_size, C] if present
         block_size = sd['pos_emb.weight'].shape[0] if 'pos_emb.weight' in sd else 256
         # count transformer blocks present
+        # (parameter names look like "blocks.3.attn.wq.weight" -> collect the layer indices)
         import re
         layer_ids = {int(m.group(1)) for k in sd.keys() if (m := re.match(r"blocks\.(\d+)\.", k))}
         n_layer = max(layer_ids) + 1 if layer_ids else 1
         # pick an n_head that divides C (head count doesn't affect weight shapes)
+        # (true for plain MHA: Q/K/V are C x C either way; it does change the computation though,
+        #  so a wrong guess gives a model that loads but behaves differently than trained)
         n_head = 8 if C % 8 == 0 else 4 if C % 4 == 0 else 2 if C % 2 == 0 else 1
         cfg = dict(
             vocab_size=vocab_from_tok or V,
@@ -77,12 +81,14 @@ def main():
     # prompt ids
     if tok:
         ids = tok.encode(args.prompt)
-        if len(ids) == 0: ids = [10]
+        if len(ids) == 0: ids = [10]   # need at least one token to start generating
     else:
+        # No tokenizer saved -> assume a byte-level model.
         ids = [10] if args.prompt == '' else list(args.prompt.encode('utf-8'))
-    idx = torch.tensor([ids], dtype=torch.long, device=device)
+    idx = torch.tensor([ids], dtype=torch.long, device=device)   # (1, T)
 
     with torch.no_grad():
+        # Uses GPTModern's KV-cached generate (default temperature=1.0, top_k=50).
         out = model.generate(idx, max_new_tokens=args.tokens)
     out_ids = out[0].tolist()
     if tok:

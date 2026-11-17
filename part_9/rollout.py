@@ -17,10 +17,16 @@ try:
 except Exception:
     ByteTokenizer = None
 
+# Package-style import: requires the repo root on sys.path (added when model_modern is imported
+# via policy.py, which the training/eval scripts import first).
 from part_6.formatters import Example, format_example, format_prompt_only
+
+# "Rollout" = letting the current policy generate responses, then recording what's needed to learn
+# from them (token log-probs, rewards). This file holds the helpers for that.
 
 # ---------- tokenizer helpers ----------
 class RLHFTokenizer:
+    # Same tokenizer selection logic as the Part 6/7 collators; must match the SFT model's tokenizer.
     def __init__(self, block_size: int, bpe_dir: str | None = None, vocab_size: int = 8000):
         self.block_size = block_size
         self.tok = None
@@ -62,14 +68,19 @@ def gather_logprobs(logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
     logits: (B,T,V), labels: (B,T) over same T
     returns: (B,T) log p(labels)
     """
+    # log_softmax turns logits into log-probabilities over the vocab; gather picks out the
+    # log-prob of the token that was actually there. This number — log pi(token | context) —
+    # is the central quantity in policy-gradient RL.
     logp = torch.log_softmax(logits, dim=-1)
     return logp.gather(-1, labels.unsqueeze(-1)).squeeze(-1)
 
 @torch.no_grad()
 def model_logprobs(model, x: torch.Tensor) -> torch.Tensor:
     # compute log p(x[t+1] | x[:t]) for t
+    # Works for both PolicyWithValue (use its .lm) and a bare GPTModern.
     logits, _, _ = model.lm(x, None) if hasattr(model, 'lm') else model(x, None)
     labels = shift_labels(x)
+    # Drop the last position's logits (it predicts a token beyond the sequence).
     lp = gather_logprobs(logits[:, :-1, :], labels)
     return lp  # (B, T-1)
 
@@ -77,6 +88,8 @@ def model_logprobs(model, x: torch.Tensor) -> torch.Tensor:
 
 def approx_kl(policy_logp: torch.Tensor, ref_logp: torch.Tensor) -> torch.Tensor:
     # Mean over tokens: KL(pi||ref) ≈ (logp_pi - logp_ref).mean()
+    # Since the tokens were sampled from pi, averaging log(pi/ref) over them estimates KL(pi||ref):
+    # how far the RL policy has drifted from the reference (SFT) model.
     return (policy_logp - ref_logp).mean()
 
 # ---------- small prompt source ----------
@@ -86,6 +99,7 @@ except Exception:
     _load_ds = None
 
 def sample_prompts(n: int) -> List[str]:
+    # RL needs prompts only (no reference answers): the policy writes the answers, the RM grades them.
     if _load_ds is not None:
         try:
             ds = _load_ds("tatsu-lab/alpaca", split="train[:24]")
@@ -110,4 +124,5 @@ def sample_prompts(n: int) -> List[str]:
         "Summarize why PPO is used in RLHF.",
         "Write a tiny Python function that reverses a list.",
     ]
+    # Repeat the base list as needed and cut to exactly n prompts.
     return (base * ((n+len(base)-1)//len(base)))[:n]

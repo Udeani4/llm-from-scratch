@@ -23,6 +23,7 @@ import argparse, pathlib, subprocess, sys, shlex
 ROOT = pathlib.Path(__file__).resolve().parent
 
 def run(cmd: str):
+    # Run a command from inside part_5/ and abort on failure.
     print(f"\n>>> {cmd}")
     res = subprocess.run(shlex.split(cmd), cwd=ROOT)
     if res.returncode != 0:
@@ -39,6 +40,7 @@ if __name__ == "__main__":
     run("python -m pytest -q tests/test_hybrid_block.py")
 
     # 2) optional demo
+    # 6 tokens routed across 4 experts with top-1 routing; prints the per-expert token counts.
     if args.demo:
         run("python demo_moe.py --tokens 6 --hidden 128 --experts 4 --top_k 1")
 

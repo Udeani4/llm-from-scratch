@@ -27,6 +27,9 @@ class PairCollator:
     """Tokenize preference pairs into (pos, neg) input ids.
     We format as the SFT template with the 'chosen' or 'rejected' text as the Response.
     """
+    # A reward model is trained on PAIRS: the same prompt answered two ways, one preferred by a
+    # human ("chosen" -> pos) and one not ("rejected" -> neg). The collator turns each pair into
+    # two token sequences so the model can score both.
     def __init__(self, block_size: int = 256, bpe_dir: str | None = None, vocab_size: int | None = None):
         self.block_size = block_size
         self.tok = None
@@ -35,6 +38,7 @@ class PairCollator:
                 self.tok = BPETokenizer(vocab_size=vocab_size or 8000)
                 if bpe_dir:
                     self.tok.load(bpe_dir)
+                # (if bpe_dir is None the BPE tokenizer is untrained, so encode() will fail at use time)
             except Exception:
                 self.tok = None
         if self.tok is None and ByteTokenizer is not None:
@@ -58,10 +62,14 @@ class PairCollator:
         # batch of (prompt, chosen, rejected)
         pos_ids, neg_ids = [], []
         for prompt, chosen, rejected in batch:
+            # Same SFT template as Part 6 so the formatting matches what the policy model produces.
             pos_text = format_example(Example(prompt, chosen))
             neg_text = format_example(Example(prompt, rejected))
+            # Truncate to the context length (long HH conversations get cut off).
             pos_ids.append(self._encode(pos_text)[:self.block_size])
             neg_ids.append(self._encode(neg_text)[:self.block_size])
+        # Pad with id 2 (<pad>). No labels needed: the reward model outputs one score per sequence,
+        # and it treats id 2 as padding to ignore (see model_reward.py).
         def pad_to(x, pad=2):
             return x + [pad] * (self.block_size - len(x)) if len(x) < self.block_size else x[:self.block_size]
         pos = torch.tensor([pad_to(x) for x in pos_ids], dtype=torch.long)

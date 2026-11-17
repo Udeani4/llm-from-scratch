@@ -13,11 +13,13 @@ class FeedForward(nn.Module):
     """
     def __init__(self, d_model: int, mult: int = 4, dropout: float = 0.0):
         super().__init__()
+        # A 2-layer MLP applied to every token independently. Most of a transformer's parameters
+        # (and much of its stored "knowledge") live in these layers.
         self.net = nn.Sequential(
-            nn.Linear(d_model, mult * d_model),
-            nn.GELU(),
-            nn.Linear(mult * d_model, d_model),
-            nn.Dropout(dropout),
+            nn.Linear(d_model, mult * d_model),   # expand to a wider hidden space
+            nn.GELU(),                            # smooth ReLU-like non-linearity used by GPT/BERT
+            nn.Linear(mult * d_model, d_model),   # project back so the residual add shapes match
+            nn.Dropout(dropout),                  # regularisation (randomly zeroes activations in training)
         )
 
     def forward(self, x):
